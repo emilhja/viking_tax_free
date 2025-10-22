@@ -4,14 +4,12 @@ from typing import Dict, List
 
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 
 
 class VikingLineScraper:
     def __init__(self):
         self.base_url = "https://www.vikingline.se/api/taxfree/articles"
         self.main_page = "https://www.vikingline.se/ombord/taxfree-shopping/helsingfors/vin/"
-        self.product_base_url = "https://www.vikingline.se/ombord/taxfree-shopping/helsingfors/vin/"
         self.session = requests.Session()
         
         # More complete browser headers
@@ -44,93 +42,8 @@ class VikingLineScraper:
             print(f"Warning: Could not visit main page: {e}")
             return False
     
-    def get_product_details(self, product_id: str) -> Dict:
-        """Fetch detailed information from product page"""
-        url = f"{self.product_base_url}{product_id}/"
-        
-        try:
-            print(f"Fetching details for product {product_id}...", end=" ")
-            response = self.session.get(url, timeout=15)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            details = {}
-            
-            # Extract title
-            title = soup.find('h1')
-            if title:
-                details['detailed_title'] = title.get_text(strip=True)
-            
-            # Extract all product information from various possible locations
-            # Look for description
-            desc_selectors = [
-                'div.product-description',
-                'div.description',
-                'div[class*="description"]',
-                'p.product-info'
-            ]
-            for selector in desc_selectors:
-                desc = soup.select_one(selector)
-                if desc:
-                    details['detailed_description'] = desc.get_text(strip=True)
-                    break
-            
-            # Look for product details/specifications
-            specs_table = soup.find('table', class_='product-specs') or soup.find('dl', class_='product-details')
-            if specs_table:
-                specs = {}
-                if specs_table.name == 'table':
-                    rows = specs_table.find_all('tr')
-                    for row in rows:
-                        cells = row.find_all(['td', 'th'])
-                        if len(cells) >= 2:
-                            key = cells[0].get_text(strip=True)
-                            value = cells[1].get_text(strip=True)
-                            specs[key] = value
-                elif specs_table.name == 'dl':
-                    dts = specs_table.find_all('dt')
-                    dds = specs_table.find_all('dd')
-                    for dt, dd in zip(dts, dds):
-                        key = dt.get_text(strip=True)
-                        value = dd.get_text(strip=True)
-                        specs[key] = value
-                
-                details['specifications'] = specs
-            
-            # Look for price information
-            price = soup.select_one('.price, .product-price, [class*="price"]')
-            if price:
-                details['detailed_price'] = price.get_text(strip=True)
-            
-            # Look for images
-            images = soup.find_all('img', class_=['product-image', 'main-image'])
-            if images:
-                details['image_urls'] = [img.get('src') or img.get('data-src') for img in images]
-            
-            # Look for any additional metadata
-            meta_info = soup.find_all('div', class_=['product-meta', 'product-info'])
-            for meta in meta_info:
-                text = meta.get_text(strip=True)
-                if text and 'detailed_meta' not in details:
-                    details['detailed_meta'] = text
-            
-            # Extract all text content as fallback
-            if not details:
-                main_content = soup.find('main') or soup.find('div', class_='content')
-                if main_content:
-                    details['page_content'] = main_content.get_text(strip=True)[:1000]
-            
-            print("✓")
-            time.sleep(0.5)  # Be nice to the server
-            return details
-            
-        except Exception as e:
-            print(f"✗ Error: {e}")
-            return {}
-    
     def get_products(self, ship_ids: str = "4,7", category_id: int = 7, 
-                     language: str = "sv", sek_only: bool = False, 
-                     fetch_details: bool = False) -> Dict:
+                     language: str = "sv", sek_only: bool = False) -> Dict:
         """
         Fetch products from Viking Line API
         
@@ -139,7 +52,6 @@ class VikingLineScraper:
             category_id: User category ID (7 appears to be wine)
             language: Language code (sv, fi, en)
             sek_only: Whether to show only SEK prices
-            fetch_details: Whether to fetch detailed info from product pages
         """
         params = {
             'shipId': ship_ids,
@@ -152,22 +64,7 @@ class VikingLineScraper:
             response = self.session.get(self.base_url, params=params, timeout=15)
             print(f"Response status: {response.status_code}")
             response.raise_for_status()
-            data = response.json()
-            
-            # If fetch_details is True, get detailed info for each product
-            if fetch_details and data:
-                print(f"\nFetching detailed information for products...")
-                products = self.parse_products(data)
-                
-                for product in products:
-                    if product.get('id'):
-                        details = self.get_product_details(product['id'])
-                        product.update(details)
-                
-                return {'products': products, 'detailed': True}
-            
-            return data
-            
+            return response.json()
         except requests.exceptions.HTTPError as e:
             print(f"HTTP Error {response.status_code}: {e}")
             print(f"Response content: {response.text[:500]}")
@@ -180,10 +77,6 @@ class VikingLineScraper:
         """Parse product data into a list of dictionaries"""
         if not data:
             return []
-        
-        # If data already has 'products' key and 'detailed' flag, it's already parsed
-        if isinstance(data, dict) and data.get('detailed'):
-            return data.get('products', [])
         
         products = []
         
@@ -226,7 +119,7 @@ class VikingLineScraper:
         if products:
             df = pd.DataFrame(products)
             df.to_csv(filename, index=False, encoding='utf-8-sig')
-            print(f"\n✓ Saved {len(products)} products to {filename}")
+            print(f"Saved {len(products)} products to {filename}")
         else:
             print("No products to save")
     
@@ -235,7 +128,7 @@ class VikingLineScraper:
         if data:
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f"✓ Saved raw data to {filename}")
+            print(f"Saved raw data to {filename}")
 
 def main():
     scraper = VikingLineScraper()
@@ -245,13 +138,14 @@ def main():
     
     print("\nFetching Viking Line wine products...")
     
-    # Set fetch_details=True to get detailed info from each product page
-    # Warning: This will make many requests and take longer!
+    # Category IDs you might want to try:
+    # 7 = Wine (from your URL)
+    # Other categories might include spirits, beer, etc.
+    
     data = scraper.get_products(
-        ship_ids="4,7",      # Helsinki route ships
-        category_id=7,        # Wine category
-        language="sv",
-        fetch_details=True    # Set to False for faster scraping without details
+        ship_ids="4,7",  # Helsinki route ships
+        category_id=7,    # Wine category
+        language="sv"
     )
     
     if data:
@@ -265,7 +159,7 @@ def main():
         # Print summary
         print(f"\nFound {len(products)} products")
         if products:
-            print("\nSample product with details:")
+            print("\nSample product:")
             print(json.dumps(products[0], indent=2, ensure_ascii=False))
     else:
         print("\nFailed to fetch data. The API might require:")
